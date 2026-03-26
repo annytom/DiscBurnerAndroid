@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Mass Storage类设备 -->
+    <usb-device class="8" subclass="0" protocol="0" />
+    <usb-device class="8" subclass="1" protocol="0" />
+    <usb-device class="8" subclass="2" protocol="0" />
+    <usb-device class="8" subclass="6" protocol="80" />
+
+    <!-- 已知刻录机VID（可根据实际设备扩展） -->
+    <!-- Initio -->
+    <usb-device vendor-id="5117" />
+    <!-- JMicron -->
+    <usb-device vendor-id="5422" />
+    <!-- Y-E DATA -->
+    <usb-device vendor-id="1403" />
+    <!-- MediaTek -->
+    <usb-device vendor-id="3725" />
+    <!-- Western Digital -->
+    <usb-device vendor-id="4184" />
+    <!-- Samsung -->
+    <usb-device vendor-id="1256" />
+    <!-- HP -->
+    <usb-device vendor-id="1008" />
+    <!-- Seagate -->
+    <usb-device vendor-id="2970" />
+    <!-- Iomega -->
+    <usb-device vendor-id="1435" />
+    <!-- NEC -->
+    <usb-device vendor-id="1033" />
+    <!-- Sony -->
+    <usb-device vendor-id="1356" />
+    <!-- Alcor Micro -->
+    <usb-device vendor-id="1423" />
+    <!-- Freecom -->
+    <usb-device vendor-id="1963" />
+    <!-- Addonics -->
+    <usb-device vendor-id="3062" />
+    <!-- Super Top -->
+    <usb-device vendor-id="5325" />
+    <!-- LG -->
+    <usb-device vendor-id="4154" />
+    <!-- Lite-On -->
+    <usb-device vendor-id="4515" />
+    <!-- ASUS -->
+    <usb-device vendor-id="2821" />
+    <!-- TSST (Toshiba Samsung) -->
+    <usb-device vendor-id="5110" />
+    <!-- Plextor -->
+    <usb-device vendor-id="34918" />
+    <!-- Pioneer -->
+    <usb-device vendor-id="1001" />
+</resources>

@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">企业光盘刻录</string>
+    <string name="app_name_en">Enterprise Disc Burner</string>
+
+    <!-- 界面文本 -->
+    <string name="device_connected">设备已连接</string>
+    <string name="device_disconnected">未连接刻录机</string>
+    <string name="scan_device">扫描设备</string>
+    <string name="select_iso">选择ISO文件</string>
+    <string name="start_burn">开始刻录</string>
+    <string name="cancel_burn">取消刻录</string>
+    <string name="burning">正在刻录…</string>
+    <string name="verifying">正在校验…</string>
+    <string name="burn_success">刻录成功</string>
+    <string name="burn_failed">刻录失败</string>
+    <string name="export_logs">导出日志</string>
+    <string name="clear_logs">清除日志</string>
+    <string name="logs">日志</string>
+    <string name="verification_passed">校验通过</string>
+    <string name="verification_failed">校验失败</string>
+
+    <!-- 通知 -->
+    <string name="notification_channel_name">光盘刻录服务</string>
+    <string name="notification_channel_description">显示刻录进度和状态</string>
+    <string name="notification_title_idle">光盘刻录服务</string>
+    <string name="notification_text_idle">准备就绪</string>
+
+    <!-- 错误信息 -->
+    <string name="error_no_device">未找到刻录机</string>
+    <string name="error_no_permission">USB权限被拒绝</string>
+    <string name="error_no_file">未选择ISO文件</string>
+    <string name="error_file_not_found">文件不存在</string>
+    <string name="error_disc_not_ready">光盘未就绪</string>
+    <string name="error_disc_full">光盘空间不足</string>
+    <string name="error_write_failed">写入失败</string>
+    <string name="error_verify_failed">校验失败，数据可能不正确</string>
+
+    <!-- 审计日志 -->
+    <string name="audit_burn_started">刻录开始</string>
+    <string name="audit_burn_completed">刻录完成</string>
+    <string name="audit_burn_failed">刻录失败</string>
+    <string name="audit_verify_passed">校验通过</string>
+    <string name="audit_verify_failed">校验失败</string>
+</resources>
