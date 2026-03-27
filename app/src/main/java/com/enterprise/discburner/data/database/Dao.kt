@@ -94,7 +94,7 @@ interface BurnSessionDao {
     suspend fun updateSessionStatus(sessionId: String, status: String, endTime: Long?, duration: Long?)
 
     @Query("DELETE FROM burn_sessions WHERE startTime < :beforeTime")
-    suspend function deleteOldSessions(beforeTime: Long)
+    suspend fun deleteOldSessions(beforeTime: Long)
 
     @Query("SELECT COUNT(*) FROM burn_sessions")
     suspend fun getSessionCount(): Int

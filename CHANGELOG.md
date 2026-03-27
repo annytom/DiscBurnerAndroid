@@ -7,24 +7,42 @@
 ### 新增（阶段2完成）
 - Room数据库持久化审计日志
 - 刻录队列管理（多任务排队、优先级、自动/手动模式）
+- 队列管理UI界面（QueueScreen.kt）
+- 历史记录UI界面（HistoryScreen.kt）
 - SCSI命令重试机制（指数退避、可重试错误识别）
 - 审计日志数字签名（HMAC-SHA256防篡改）
+- 刻录速度控制（支持4x/8x/16x/24x/32x/48x/52x）
 - 刻录会话完整记录（开始/完成/失败状态）
 - 设备信息管理（使用统计）
 - 刻录文件哈希追踪
-- 增强的日志导出（数据库+文本）
+- 增强的日志导出（数据库JSON+文本ZIP双格式）
+- 应用图标资源（ic_launcher_foreground/background）
 
 ### 改进
 - 审计日志系统完全重写（EnhancedAuditLogger）
 - BurnService支持队列管理
 - ISO 9660生成器完整实现
-- 完整单元测试覆盖
+- 主题配置完善（状态栏/导航栏颜色）
+- 完整单元测试覆盖（18+新测试用例）
+
+### UI
+- 新增队列管理界面（标签页：待处理/进行中/已完成/失败）
+- 新增历史记录界面（搜索、筛选、统计）
+- 自动处理开关控制
+- 任务优先级可视化标识
+- 刻录统计概览卡片
+
+### 测试
+- EnhancedAuditLoggerTest（数字签名、篡改检测、导出）
+- ScsiRetryManagerTest（重试机制、指数退避）
+- BurnQueueManagerTest（队列操作、并发安全）
 
 ### 架构
 - 新增Room数据库模块（Entities、Dao、Database）
 - 新增Repository层
 - 新增ScsiRetryManager
 - 新增BurnQueueManager
+- 新增ui/screens包（QueueScreen、HistoryScreen）
 
 ## [1.2.0] - 2026-03-27
 

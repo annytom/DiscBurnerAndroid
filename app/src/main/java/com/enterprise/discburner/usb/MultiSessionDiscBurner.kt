@@ -31,6 +31,7 @@ enum class BurnStage(val description: String) {
  */
 data class WriteOptions(
     val writeMode: WriteMode = WriteMode.TAO,
+    val writeSpeed: Int = 0,  // 0 = 最大速度, 4, 8, 16, 24, 32, 40, 48, 52 (x speed)
     val closeSession: Boolean = false,  // 是否关闭当前会话（用于多会话的最后一步）
     val closeDisc: Boolean = false,      // 是否关闭光盘（不可再追加）
     val verifyAfterBurn: Boolean = true,
