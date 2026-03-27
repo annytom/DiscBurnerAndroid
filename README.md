@@ -1,6 +1,8 @@
-# 企业光盘刻录系统 V2.0
+# 企业光盘刻录系统 V2.0.0
 
 面向政府机构、银行等受监管行业的企业级Android光盘刻录解决方案。
+
+**状态**: 阶段2完成 ✅ | **最后更新**: 2026-03-27
 
 ## ✨ 核心特性
 
@@ -10,7 +12,14 @@
 - **卷标设置** - 自定义光盘卷标
 - **刻录速度** - 支持4x/8x/16x/24x/32x/48x/52x速度选择
 
-### 2. 多会话（补刻）支持
+### 2. 刻录机型号选择
+- **自动检测** - 连接设备后自动识别刻录机型号
+- **手动选择** - 从型号数据库中选择匹配的刻录机
+- **品牌支持** - ASUS、LG、Samsung、Lite-On、Pioneer、Sony、HP等主流品牌
+- **智能配置** - 根据型号自动配置最大速度、缓冲区大小等参数
+- **特性识别** - 支持防刻死、双层刻录、光雕等特性显示
+
+### 3. 多会话（补刻）支持
 - **追加刻录** - 在已有数据的光盘上追加新文件
 - **会话管理** - 支持多轨道、多会话管理
 - **写入模式** - DAO/TAO/SAO三种模式灵活选择
@@ -69,6 +78,25 @@
 4. 开启"自动处理"模式
 5. 系统自动按顺序刻录
 6. 查看历史记录界面了解刻录统计
+
+### 选择刻录机型号
+
+1. 连接USB刻录机后，系统自动检测型号
+2. 在设备状态卡片查看检测到的型号
+3. 点击"更改"按钮进入型号选择界面
+4. 可接受自动检测结果，或手动选择准确型号
+5. 选择型号后，系统根据型号规格自动配置刻录参数
+
+**型号数据库包含：**
+- ASUS: DRW-24B3ST, SDRW-08D2S-U
+- LG: GH24NSD1, GP65NB60
+- Samsung: SE-208GB, SH-224FB
+- Lite-On: iHAS324, eBAU108
+- Pioneer: DVR-S21WBK
+- Sony: AD-7290H, DRX-S90U
+- HP: DVD1270i, DVD556s
+- Buffalo: DVSM-PC58U2V
+- Transcend: TS8XDVDS
 
 ## 🔧 写入模式说明
 
@@ -210,7 +238,7 @@ val signature = generateHmacSignature(signatureData, secretKey)
 app/src/main/java/com/enterprise/discburner/
 ├── data/
 │   ├── database/
-│   │   ├── Entities.kt          # Room实体（审计日志、会话、设备）
+│   │   ├── Entities.kt          # Room实体（审计日志、会话、文件、设备）
 │   │   ├── Dao.kt               # 数据访问对象
 │   │   └── Database.kt          # Room数据库配置
 │   ├── AuditLogger.kt           # 基础文件日志
@@ -224,11 +252,14 @@ app/src/main/java/com/enterprise/discburner/
 ├── ui/
 │   ├── screens/
 │   │   ├── QueueScreen.kt       # 队列管理界面
-│   │   └── HistoryScreen.kt     # 历史记录界面
+│   │   ├── HistoryScreen.kt     # 历史记录界面
+│   │   └── DeviceSelectionScreen.kt  # 刻录机配置界面（速度/模式）
+│   ├── DeviceSelectionActivity.kt  # 刻录机型号选择Activity
 │   ├── MainActivity.kt          # 主界面
 │   └── BurnViewModel.kt         # UI状态管理
 └── usb/
     ├── MultiSessionDiscBurner.kt # 多会话刻录核心
+    ├── BurnerModel.kt           # 刻录机型号数据库
     ├── ScsiCommands.kt          # SCSI命令封装
     ├── ScsiRetryManager.kt      # SCSI重试机制
     └── UsbBurnerManager.kt      # USB设备管理

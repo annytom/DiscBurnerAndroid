@@ -47,17 +47,23 @@
 ## [1.3.0] - 2026-03-27
 
 ### 新增
-- UI 屏幕组件（HistoryScreen, QueueScreen）
+- 刻录机型号选择功能
+  - 支持主流品牌刻录机型号的自动检测和手动选择
+  - 支持ASUS、LG、Samsung、Lite-On、Pioneer、Sony、HP、Buffalo、Transcend等品牌
+  - 型号数据库包含型号规格、最大速度、特性支持等详细信息
+  - 根据选择的型号自动配置刻录参数（最大速度、缓冲区大小等）
+- UI屏幕组件（DeviceSelectionScreen、HistoryScreen、QueueScreen）
 - 代码审查报告（CODE_REVIEW_REPORT.md）
 - 启动器图标资源
-- EnhancedAuditLogger 单元测试
-- ScsiRetryManager 单元测试
+- EnhancedAuditLogger单元测试
+- ScsiRetryManager单元测试
 
 ### 改进
-- 更新数据库 DAO 接口
-- 优化多区段刻录器
+- 更新数据库DAO接口（添加设备型号相关查询）
+- 优化多区段刻录器（添加刻录速度控制）
 - 更新主题样式
-- 完善文档（README, PHASE2_SUMMARY）
+- 完善文档（README、PHASE2_SUMMARY）
+- 设备状态卡片显示当前选择的型号
 
 ## [1.2.0] - 2026-03-27
 

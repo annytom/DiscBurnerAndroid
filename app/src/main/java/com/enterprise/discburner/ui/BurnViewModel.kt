@@ -19,6 +19,7 @@ data class BurnUiState(
     // 设备状态
     val isConnected: Boolean = false,
     val deviceName: String? = null,
+    val selectedDeviceModel: String? = null,  // 选择的刻录机型号名称
 
     // 光盘分析
     val discAnalysis: DiscAnalysisResult? = null,
@@ -31,6 +32,8 @@ data class BurnUiState(
 
     // 刻录选项
     val writeMode: WriteMode = WriteMode.TAO,
+    val writeSpeed: Int = 0,  // 0 = 自动/最大速度
+    val maxSupportedSpeed: Int = 52,  // 设备支持的最大速度
     val closeSession: Boolean = false,
     val closeDisc: Boolean = false,
     val verifyAfterBurn: Boolean = true,
@@ -295,6 +298,33 @@ class BurnViewModel : ViewModel() {
         }
 
         updateCanStartBurn()
+    }
+
+    /**
+     * 设置设备型号
+     */
+    fun setDeviceModel(modelName: String?) {
+        _uiState.value = _uiState.value.copy(selectedDeviceModel = modelName)
+        if (modelName != null) {
+            addLog("刻录机型号: $modelName")
+        }
+    }
+
+    /**
+     * 设置最大速度
+     */
+    fun setMaxSpeed(speed: Int) {
+        _uiState.value = _uiState.value.copy(maxSupportedSpeed = speed)
+        addLog("设备支持最大速度: ${speed}x")
+    }
+
+    /**
+     * 设置刻录速度
+     */
+    fun setWriteSpeed(speed: Int) {
+        _uiState.value = _uiState.value.copy(writeSpeed = speed)
+        val speedText = if (speed == 0) "自动" else "${speed}x"
+        addLog("刻录速度: $speedText")
     }
 
     /**

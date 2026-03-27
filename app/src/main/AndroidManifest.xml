@@ -60,6 +60,12 @@
                 android:resource="@xml/device_filter" />
         </activity>
 
+        <activity
+            android:name=".ui.DeviceSelectionActivity"
+            android:exported="false"
+            android:theme="@style/Theme.DiscBurner"
+            android:screenOrientation="portrait" />
+
         <service
             android:name=".service.BurnService"
             android:enabled="true"

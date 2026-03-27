@@ -155,4 +155,31 @@ interface DeviceInfoDao {
         success: Int,
         failed: Int
     )
+
+    /**
+     * 更新设备型号信息
+     */
+    @Query("""
+        UPDATE device_info
+        SET modelId = :modelId,
+            modelName = :modelName,
+            brandName = :brandName,
+            maxSpeed = :maxSpeed,
+            bufferSize = :bufferSize
+        WHERE deviceId = :deviceId
+    """)
+    suspend fun updateDeviceModel(
+        deviceId: String,
+        modelId: String,
+        modelName: String,
+        brandName: String,
+        maxSpeed: Int,
+        bufferSize: Int
+    )
+
+    /**
+     * 根据型号ID查找设备
+     */
+    @Query("SELECT * FROM device_info WHERE modelId = :modelId")
+    suspend fun getDevicesByModelId(modelId: String): List<DeviceInfoEntity>
 }

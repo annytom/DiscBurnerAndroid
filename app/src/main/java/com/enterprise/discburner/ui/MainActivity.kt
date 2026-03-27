@@ -37,8 +37,11 @@ import com.enterprise.discburner.data.BurnResult
 import com.enterprise.discburner.service.BurnService
 import com.enterprise.discburner.service.BurnTask
 import com.enterprise.discburner.service.ServiceState
-import com.enterprise.discburner.ui.theme.DiscBurnerTheme
-import com.enterprise.discburner.usb.*
+import com.enterprise.discburner.data.database.DeviceInfoEntity
+import com.enterprise.discburner.ui.screens.DeviceSelectionScreen
+import com.enterprise.discburner.usb.BurnerModel
+import com.enterprise.discburner.usb.BurnerModelDatabase
+import com.enterprise.discburner.usb.WriteOptions
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -47,6 +50,9 @@ class MainActivity : ComponentActivity() {
     private var burnService: BurnService? = null
     private var serviceBound = false
     private val viewModel = BurnViewModel()
+
+    private var currentDevice: UsbDevice? = null
+    private var selectedBurnerModel: BurnerModel? = null
 
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
@@ -122,7 +128,8 @@ class MainActivity : ComponentActivity() {
                     onClearLogs = { viewModel.clearLogs() },
                     onAddFiles = { multiFilePickerLauncher.launch(arrayOf("*/*")) },
                     onAddIso = { filePickerLauncher.launch(arrayOf("application/x-iso9660-image")) },
-                    onRequestStoragePermission = { requestStoragePermission() }
+                    onRequestStoragePermission = { requestStoragePermission() },
+                    onSelectModel = { showDeviceSelection() }
                 )
             }
         }
@@ -140,6 +147,13 @@ class MainActivity : ComponentActivity() {
                     is UsbDeviceState.Connected -> {
                         viewModel.setDeviceConnected(true, state.deviceName)
                         usbManager.getCurrentDevice()?.let { device ->
+                            currentDevice = device
+                            // 自动检测型号
+                            val autoModel = BurnerModelDatabase.autoDetect(device.vendorId, device.productId)
+                            if (selectedBurnerModel == null) {
+                                selectedBurnerModel = autoModel
+                                viewModel.setDeviceModel(autoModel.displayName)
+                            }
                             service.prepareBurn(device)
                         }
                     }
@@ -198,7 +212,15 @@ class MainActivity : ComponentActivity() {
     private fun scanForDevice() {
         val device = burnService?.getUsbManager()?.scanForBurner()
         if (device != null) {
+            currentDevice = device
             viewModel.addLog("发现刻录机: ${device.deviceName}")
+
+            // 自动检测型号
+            val autoModel = BurnerModelDatabase.autoDetect(device.vendorId, device.productId)
+            selectedBurnerModel = autoModel
+            viewModel.setDeviceModel(autoModel.displayName)
+            viewModel.addLog("自动检测到型号: ${autoModel.fullName}")
+
             if (burnService?.getUsbManager()?.hasPermission(device) == true) {
                 burnService?.prepareBurn(device)
             } else {
@@ -241,6 +263,42 @@ class MainActivity : ComponentActivity() {
     private fun cancelBurn() {
         burnService?.cancelTask()
         viewModel.addLog("任务已取消")
+    }
+
+    private fun showDeviceSelection() {
+        val device = currentDevice
+        if (device == null) {
+            viewModel.addLog("请先连接刻录机")
+            return
+        }
+
+        // 启动设备选择Activity或显示对话框
+        // 这里简化处理，使用ViewModel来管理选择状态
+        val intent = Intent(this, DeviceSelectionActivity::class.java).apply {
+            putExtra("vendorId", device.vendorId)
+            putExtra("productId", device.productId)
+            putExtra("currentModelId", selectedBurnerModel?.modelId)
+        }
+        deviceSelectionLauncher.launch(intent)
+    }
+
+    private val deviceSelectionLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK) {
+            val modelId = result.data?.getStringExtra("selectedModelId")
+            modelId?.let {
+                val model = BurnerModelDatabase.findByModelId(it)
+                if (model != null) {
+                    selectedBurnerModel = model
+                    viewModel.setDeviceModel(model.displayName)
+                    viewModel.addLog("已选择刻录机: ${model.fullName}")
+
+                    // 根据型号更新最大速度
+                    viewModel.setMaxSpeed(model.maxSpeed)
+                }
+            }
+        }
     }
 
     private fun exportLogs() {
@@ -304,7 +362,8 @@ fun BurnScreen(
     onClearLogs: () -> Unit,
     onAddFiles: () -> Unit,
     onAddIso: () -> Unit,
-    onRequestStoragePermission: () -> Unit
+    onRequestStoragePermission: () -> Unit,
+    onSelectModel: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -335,7 +394,9 @@ fun BurnScreen(
             DeviceStatusCard(
                 isConnected = uiState.isConnected,
                 deviceName = uiState.deviceName,
-                onScanClick = onScanDevice
+                selectedModel = uiState.selectedDeviceModel,
+                onScanClick = onScanDevice,
+                onSelectModel = onSelectModel
             )
 
             // 光盘分析卡片（仅在连接后显示）
@@ -428,47 +489,88 @@ fun BurnScreen(
 fun DeviceStatusCard(
     isConnected: Boolean,
     deviceName: String?,
-    onScanClick: () -> Unit
+    selectedModel: String?,
+    onScanClick: () -> Unit,
+    onSelectModel: () -> Unit
 ) {
     Card(
         colors = CardDefaults.cardColors(
             containerColor = if (isConnected) Color(0xFFE8F5E9) else Color(0xFFFFF3E0)
         )
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+                .padding(16.dp)
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    if (isConnected) Icons.Default.CheckCircle else Icons.Default.Usb,
-                    null,
-                    tint = if (isConnected) Color(0xFF4CAF50) else Color(0xFFFF9800)
-                )
-                Spacer(modifier = Modifier.width(12.dp))
-                Column {
-                    Text(
-                        if (isConnected) "设备已连接" else "未连接刻录机",
-                        style = MaterialTheme.typography.titleMedium
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        if (isConnected) Icons.Default.CheckCircle else Icons.Default.Usb,
+                        null,
+                        tint = if (isConnected) Color(0xFF4CAF50) else Color(0xFFFF9800)
                     )
-                    if (isConnected && deviceName != null) {
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column {
                         Text(
-                            deviceName,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            if (isConnected) "设备已连接" else "未连接刻录机",
+                            style = MaterialTheme.typography.titleMedium
                         )
+                        if (isConnected && deviceName != null) {
+                            Text(
+                                deviceName,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                if (!isConnected) {
+                    Button(onClick = onScanClick) {
+                        Icon(Icons.Default.Refresh, null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("扫描")
                     }
                 }
             }
 
-            if (!isConnected) {
-                Button(onClick = onScanClick) {
-                    Icon(Icons.Default.Refresh, null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("扫描")
+            // 型号信息显示
+            if (isConnected) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Divider()
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "刻录机型号",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            selectedModel ?: "未选择型号",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (selectedModel != null)
+                                MaterialTheme.colorScheme.onSurface
+                            else
+                                MaterialTheme.colorScheme.error
+                        )
+                    }
+
+                    TextButton(onClick = onSelectModel) {
+                        Icon(Icons.Default.Settings, null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(if (selectedModel != null) "更改" else "选择型号")
+                    }
                 }
             }
         }

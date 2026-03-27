@@ -111,6 +111,13 @@ data class DeviceInfoEntity(
     val manufacturer: String? = null,
     val productName: String? = null,
 
+    // 刻录机型号信息
+    val modelId: String? = null,           // 选择的型号ID
+    val modelName: String? = null,         // 型号名称
+    val brandName: String? = null,         // 品牌
+    val maxSpeed: Int = 0,                 // 最大速度
+    val bufferSize: Int = 2048,            // 缓冲区大小
+
     val totalBurns: Int = 0,
     val successfulBurns: Int = 0,
     val failedBurns: Int = 0

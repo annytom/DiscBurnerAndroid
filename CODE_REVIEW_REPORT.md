@@ -283,23 +283,27 @@ fun sanitizePath(path: String): String {
 4. ✅ 添加历史记录UI
 5. ✅ 实现刻录速度控制（配置层）
 6. ✅ 添加缺失的单元测试（EnhancedAuditLogger、ScsiRetryManager）
+7. ✅ 修复 `AndroidManifest.xml` 服务标签语法错误
+8. ✅ 修复 `DeviceSelectionScreen` 重复定义问题
+9. ✅ 修复 `BurnerFeatures` 缺失 `supportsSmartBurn` 属性
+10. ✅ 添加 `gradle.properties` 缺失配置
 
 ### 短期修复（P1）
-7. 完善权限处理（Android 10+）
-8. 添加数据库迁移策略
-9. 刻录速度SCSI命令层实现（需硬件测试）
+11. 完善权限处理（Android 10+）
+12. 添加数据库迁移策略
+13. 刻录速度SCSI命令层实现（需硬件测试）
 
 ### 中期修复（P2）
-10. 数据库加密（SQLCipher）
-11. 密钥安全管理（Android Keystore）
-12. 队列持久化（应用重启保留队列）
-13. 统计图表界面
+14. 数据库加密（SQLCipher）
+15. 密钥安全管理（Android Keystore）
+16. 队列持久化（应用重启保留队列）
+17. 统计图表界面
 
 ### 长期增强（P3）
-14. 国际化支持
-15. 设置界面
-16. 远程日志同步
-17. DVD-RW擦除重写功能
+18. 国际化支持
+19. 设置界面
+20. 远程日志同步
+21. DVD-RW擦除重写功能
 
 ---
 
@@ -311,12 +315,31 @@ fun sanitizePath(path: String): String {
 3. ✅ `res/values/themes.xml` - 主题更新（状态栏/导航栏颜色）
 4. ✅ `ui/screens/QueueScreen.kt` - 队列管理UI（450行完整实现）
 5. ✅ `ui/screens/HistoryScreen.kt` - 历史记录UI（350行完整实现）
-6. ✅ `usb/MultiSessionDiscBurner.kt` - WriteOptions添加writeSpeed字段
-7. ✅ `test/EnhancedAuditLoggerTest.kt` - 审计日志测试（18个测试用例）
-8. ✅ `test/ScsiRetryManagerTest.kt` - SCSI重试测试（18个测试用例）
+6. ✅ `ui/screens/DeviceSelectionScreen.kt` - 刻录机配置UI（速度/模式选择）
+7. ✅ `ui/DeviceSelectionActivity.kt` - 型号选择Activity ⭐新增
+8. ✅ `usb/BurnerModel.kt` - 刻录机型号数据库 ⭐新增
+9. ✅ `usb/MultiSessionDiscBurner.kt` - WriteOptions添加writeSpeed字段
+10. ✅ `test/EnhancedAuditLoggerTest.kt` - 审计日志测试（18个测试用例）
+11. ✅ `test/ScsiRetryManagerTest.kt` - SCSI重试测试（18个测试用例）
 
 ---
 
-**审查结论**: 项目整体架构良好，核心功能完整。阶段2所有P0优先级任务已完成，主要缺口在硬件测试、安全性加固、队列持久化三个方面。建议获取刻录机后进行硬件实测，并按优先级逐步修复剩余问题。
+## ✅ 构建状态
 
-**当前状态**: ✅ 阶段2完成（代码层面），等待硬件测试
+**代码审查后修复的问题：**
+
+| 序号 | 问题 | 文件 | 状态 |
+|------|------|------|------|
+| 1 | 重复定义 `DeviceSelectionScreen` | `DeviceSelectionScreen.kt` | ✅ 已修复 |
+| 2 | XML语法错误（service标签） | `AndroidManifest.xml` | ✅ 已修复 |
+| 3 | 缺失 `supportsSmartBurn` | `BurnerModel.kt` | ✅ 已修复 |
+| 4 | 缺失 `android.enableJetifier` | `gradle.properties` | ✅ 已修复 |
+| 5 | 拼写错误 `supportsBufferUndrrunProtection` | `DeviceSelectionScreen.kt` | ✅ 已修复 |
+| 6 | 缺失导入 | `MainActivity.kt` | ✅ 已修复 |
+| 7 | 使用 `FlowRow`（不存在） | `DeviceSelectionScreen.kt` | ✅ 已修复 |
+
+---
+
+**审查结论**: 项目整体架构良好，核心功能完整。阶段2所有P0优先级任务已完成，所有编译错误已修复，项目可以一次性构建成功。新增刻录机型号选择功能。主要缺口在硬件测试、安全性加固、队列持久化三个方面。建议获取刻录机后进行硬件实测，并按优先级逐步修复剩余问题。
+
+**当前状态**: ✅ 阶段2完成（代码层面），所有编译错误已修复，等待硬件测试

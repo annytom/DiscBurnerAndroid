@@ -2,6 +2,28 @@
 
 ## 版本: 2.0.0
 
+**状态**: ✅ 已完成 | **构建状态**: 已修复，可编译 | **日期**: 2026-03-27
+
+---
+
+## 代码修复记录
+
+本次代码审查和修复解决了以下问题，确保项目可一次性构建成功：
+
+### 修复的问题
+
+| 问题 | 文件 | 修复内容 |
+|------|------|----------|
+| 重复定义 | `DeviceSelectionScreen.kt` | 移除重复的`DeviceSelectionScreen`，保留`BurnerConfigurationScreen` |
+| XML语法错误 | `AndroidManifest.xml` | 修复`<service>`标签缺少开标签的问题 |
+| 缺失属性 | `BurnerFeatures` | 添加`supportsSmartBurn`属性 |
+| 缺失配置 | `gradle.properties` | 添加`android.enableJetifier=true` |
+| 拼写错误 | `DeviceSelectionScreen.kt` | 修复`supportsBufferUnderrunProtection`拼写 |
+| 缺失导入 | `MainActivity.kt` | 添加`BurnerModel`, `BurnerModelDatabase`, `WriteOptions`导入 |
+| 组件替换 | `DeviceSelectionScreen.kt` | 使用`LazyVerticalGrid`替代不存在的`FlowRow` |
+
+---
+
 ## 新增功能
 
 ### 1. Room数据库持久化 ✅
@@ -234,7 +256,51 @@ data class WriteOptions(
 
 ---
 
-### 8. XML资源完善 ✅
+### 8. 刻录机型号选择 ✅
+
+**实现内容**：
+- **型号数据库** - 包含主流品牌刻录机型号信息
+- **自动检测** - 根据USB VID/PID自动识别刻录机型号
+- **手动选择** - 支持从型号列表中手动选择
+- **智能配置** - 根据型号自动配置最大速度、缓冲区大小
+
+**支持品牌**：
+```kotlin
+- ASUS (DRW-24B3ST, SDRW-08D2S-U)
+- LG (GH24NSD1, GP65NB60)
+- Samsung (SE-208GB, SH-224FB)
+- Lite-On (iHAS324, eBAU108)
+- Pioneer (DVR-S21WBK)
+- Sony (AD-7290H, DRX-S90U)
+- HP (DVD1270i, DVD556s)
+- Buffalo (DVSM-PC58U2V)
+- Transcend (TS8XDVDS)
+- 通用型号 (CD-RW, DVD±RW)
+```
+
+**型号信息**：
+```kotlin
+data class BurnerModel(
+    val modelId: String,           // 唯一标识
+    val brand: String,             // 品牌
+    val model: String,             // 型号
+    val maxSpeed: Int,             // 最大刻录速度
+    val bufferSize: Int,           // 缓冲区大小(KB)
+    val supportedModes: List<WriteMode>,  // 支持的刻录模式
+    val features: BurnerFeatures   // 特性（防刻死、双层、光雕等）
+)
+```
+
+**文件变更**：
+- `usb/BurnerModel.kt` - 刻录机型号数据库
+- `ui/DeviceSelectionActivity.kt` - 型号选择界面
+- `ui/screens/DeviceSelectionScreen.kt` - 型号选择UI组件
+- `data/database/Entities.kt` - DeviceInfoEntity添加型号字段
+- `data/database/Dao.kt` - 添加型号相关查询
+
+---
+
+### 9. XML资源完善 ✅
 
 **实现内容**：
 - **应用图标** - ic_launcher_foreground/background
@@ -276,6 +342,7 @@ app/src/main/java/com/enterprise/discburner/
 │   └── EnhancedAuditLogger.kt   # 增强版（新增）
 ├── usb/
 │   ├── MultiSessionDiscBurner.kt # 刻录核心（含WriteOptions）
+│   ├── BurnerModel.kt           # 刻录机型号数据库 ⭐新增
 │   ├── ScsiRetryManager.kt      # 重试机制
 │   └── ScsiCommands.kt          # SCSI命令
 ├── service/
@@ -285,7 +352,9 @@ app/src/main/java/com/enterprise/discburner/
 └── ui/
     ├── screens/
     │   ├── QueueScreen.kt       # 队列管理UI
-    │   └── HistoryScreen.kt     # 历史记录UI
+    │   ├── HistoryScreen.kt     # 历史记录UI
+    │   └── DeviceSelectionScreen.kt  # 型号选择UI ⭐新增
+    ├── DeviceSelectionActivity.kt    # 型号选择Activity ⭐新增
     ├── MainActivity.kt          # 主界面
     └── BurnViewModel.kt         # 状态管理
 ```
@@ -421,6 +490,7 @@ val stats = auditLogger.getSessionStats(
 - ✅ 队列管理UI界面
 - ✅ 历史记录UI界面
 - ✅ 刻录速度控制（配置层）
+- ✅ 刻录机型号选择 ⭐新增
 - ✅ 应用图标资源
 - ✅ 完整单元测试覆盖
 
