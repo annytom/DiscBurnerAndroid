@@ -1,0 +1,24 @@
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+.DS_Store
+captures/
+.externalNativeBuild
+.cxx/
+*.apk
+*.aab
+*.log
+.navigation/
+output.json
+
+# 审计日志（可能包含敏感信息）
+*.audit
+audit_logs/
+
+# IDE
+.vscode/
+*.swp
+*.swo
+*~
