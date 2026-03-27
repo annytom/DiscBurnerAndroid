@@ -44,6 +44,19 @@
 - 新增BurnQueueManager
 - 新增ui/screens包（QueueScreen、HistoryScreen）
 
+## [2.0.0] - 2026-03-27
+
+### 新增
+- USB 设备选择界面（DeviceSelectionActivity/Screen）
+- BurnerModel 设备抽象层
+- 设备管理数据库支持
+
+### 改进
+- 优化 BurnViewModel 设备处理逻辑
+- 更新 MainActivity 集成设备选择
+- 完善项目文档（README, PHASE2_SUMMARY, CODE_REVIEW_REPORT）
+- 更新 AndroidManifest 注册新 Activity
+
 ## [1.3.0] - 2026-03-27
 
 ### 新增
