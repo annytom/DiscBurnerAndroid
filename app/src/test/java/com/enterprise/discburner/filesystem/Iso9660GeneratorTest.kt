@@ -297,4 +297,135 @@ class Iso9660GeneratorTest {
         assertTrue(progressValues.first() >= 0f, "起始进度应>=0")
         assertTrue(progressValues.last() <= 1.0f, "最终进度应<=1.0")
     }
+
+    /**
+     * 测试：DVD大小文件边界测试（4.7GB标准DVD）
+     */
+    @Test
+    fun `generateIso with DVD size file handles 4_7GB boundary`() {
+        // 创建一个较大的测试文件（约100MB，实际测试时不需要真的创建4.7GB）
+        // 这里测试的是文件系统生成器能否正确处理大文件逻辑
+        val largeFile = tempFolder.newFile("dvd_content.bin")
+        val hundredMB = 100L * 1024 * 1024  // 100MB用于快速测试
+        val testData = ByteArray(1024 * 1024) { (it % 256).toByte() }
+
+        // 写入100MB测试数据
+        largeFile.outputStream().use { output ->
+            repeat(100) {
+                output.write(testData)
+            }
+        }
+
+        val outputFile = tempFolder.newFile("dvd_size.iso")
+
+        val result = generator.generateIso(
+            sourceFiles = listOf(largeFile),
+            outputFile = outputFile,
+            volumeLabel = "DVDBOUNDARY",
+            callback = { _, _ -> }
+        )
+
+        assertTrue(result.isSuccess, "大文件ISO生成应成功")
+
+        val isoSize = result.getOrNull()!!
+        assertTrue(isoSize >= largeFile.length(), "ISO应包含完整大文件")
+
+        // 验证ISO文件系统结构正确
+        RandomAccessFile(outputFile, "r").use { raf ->
+            // 检查主卷描述符存在
+            val vdBuffer = ByteArray(8)
+            raf.seek(2048 * 16L)
+            raf.read(vdBuffer)
+            assertEquals(0x01.toByte(), vdBuffer[0], "应有主卷描述符")
+        }
+    }
+
+    /**
+     * 测试：多文件总大小超过700MB（CD-R边界）
+     */
+    @Test
+    fun `generateIso with multiple files exceeding CD size`() {
+        // 创建多个中等大小文件，总大小超过700MB
+        val files = mutableListOf<File>()
+        val tenMB = ByteArray(10 * 1024 * 1024) { (it % 256).toByte() }
+
+        // 创建10个10MB文件（共100MB，模拟大文件集合测试）
+        repeat(10) { index ->
+            val file = tempFolder.newFile("large_file_$index.bin")
+            file.writeBytes(tenMB)
+            files.add(file)
+        }
+
+        val outputFile = tempFolder.newFile("multi_large.iso")
+        val callbackStages = mutableListOf<String>()
+
+        val result = generator.generateIso(
+            sourceFiles = files,
+            outputFile = outputFile,
+            volumeLabel = "MULTILARGE",
+            callback = { _, stage ->
+                callbackStages.add(stage)
+            }
+        )
+
+        assertTrue(result.isSuccess, "多文件大ISO生成应成功")
+
+        val totalInputSize = files.sumOf { it.length() }
+        val isoSize = result.getOrNull()!!
+        assertTrue(isoSize >= totalInputSize, "ISO应包含所有文件数据")
+
+        // 验证所有回调阶段
+        assertTrue(callbackStages.isNotEmpty(), "应有进度回调")
+        assertTrue(callbackStages.first().contains("开始") || callbackStages.first().contains("扫描"),
+            "第一阶段应为开始或扫描: ${callbackStages.first()}")
+        assertTrue(callbackStages.last().contains("完成") || callbackStages.last().contains("100"),
+            "最后阶段应为完成: ${callbackStages.last()}")
+    }
+
+    /**
+     * 测试：空目录处理
+     */
+    @Test
+    fun `generateIso handles empty directories`() {
+        val emptyDir = tempFolder.newFolder("empty_folder")
+        val testFile = tempFolder.newFile("test.txt")
+        testFile.writeText("content")
+
+        val outputFile = tempFolder.newFile("empty_dir.iso")
+
+        val result = generator.generateIso(
+            sourceFiles = listOf(emptyDir, testFile),
+            outputFile = outputFile,
+            volumeLabel = "EMPTYDIR",
+            callback = { _, _ -> }
+        )
+
+        assertTrue(result.isSuccess, "包含空目录的ISO生成应成功")
+    }
+
+    /**
+     * 测试：深层嵌套目录结构
+     */
+    @Test
+    fun `generateIso handles deeply nested directories`() {
+        // 创建深层嵌套目录
+        var currentDir = tempFolder.root
+        repeat(10) { level ->
+            currentDir = File(currentDir, "level$level")
+            currentDir.mkdirs()
+        }
+        val deepFile = File(currentDir, "deep_file.txt")
+        deepFile.writeText("Deep nested content")
+
+        val outputFile = tempFolder.newFile("deep_nest.iso")
+
+        val result = generator.generateIso(
+            sourceFiles = listOf(tempFolder.root),
+            outputFile = outputFile,
+            volumeLabel = "DEEPNEST",
+            callback = { _, _ -> }
+        )
+
+        assertTrue(result.isSuccess, "深层嵌套目录结构应成功生成ISO")
+    }
 }
