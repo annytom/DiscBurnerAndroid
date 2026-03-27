@@ -1,9 +1,10 @@
-# 更新Gradle配置以支持测试
+// build.gradle.kts - 添加Room依赖
 
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
-    id("jacoco")  // 代码覆盖率
+    id("jacoco")
+    id("kotlin-kapt")  // 添加kapt用于Room
 }
 
 android {
@@ -21,6 +22,17 @@ android {
         vectorDrawables {
             useSupportLibrary = true
         }
+
+        // Room数据库导出配置
+        javaCompileOptions {
+            annotationProcessorOptions {
+                arguments += mapOf(
+                    "room.schemaLocation" to "$projectDir/schemas",
+                    "room.incremental" to "true",
+                    "room.expandProjection" to "true"
+                )
+            }
+        }
     }
 
     buildTypes {
@@ -34,8 +46,8 @@ android {
         }
         debug {
             isDebuggable = true
-            enableUnitTestCoverage = true  // 启用单元测试覆盖率
-            enableAndroidTestCoverage = true  // 启用集成测试覆盖率
+            enableUnitTestCoverage = true
+            enableAndroidTestCoverage = true
         }
     }
 
@@ -62,7 +74,6 @@ android {
         }
     }
 
-    // 测试配置
     testOptions {
         unitTests {
             isIncludeAndroidResources = true
@@ -101,48 +112,39 @@ dependencies {
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
+    // ==================== Room数据库 ====================
+    val roomVersion = "2.6.1"
+    implementation("androidx.room:room-runtime:$roomVersion")
+    implementation("androidx.room:room-ktx:$roomVersion")
+    kapt("androidx.room:room-compiler:$roomVersion")
+    testImplementation("androidx.room:room-testing:$roomVersion")
+
+    // ==================== 其他依赖 ====================
+    // JSON处理
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.2")
+
+    // 加密
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+
     // ==================== 测试依赖 ====================
-
-    // JUnit
     testImplementation("junit:junit:4.13.2")
-
-    // Kotlin测试
     testImplementation("org.jetbrains.kotlin:kotlin-test:1.9.22")
     testImplementation("org.jetbrains.kotlin:kotlin-test-junit:1.9.22")
-
-    // Coroutines测试
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
-
-    // Robolectric（Android单元测试）
     testImplementation("org.robolectric:robolectric:4.11.1")
-
-    // MockK（Kotlin模拟框架）
     testImplementation("io.mockk:mockk:1.13.9")
-
-    // Turbine（Flow测试）
     testImplementation("app.cash.turbine:turbine:1.0.0")
-
-    // AndroidX测试核心
     testImplementation("androidx.test:core-ktx:1.5.0")
     testImplementation("androidx.test.ext:junit-ktx:1.1.5")
-
-    // Android集成测试
     androidTestImplementation("androidx.test.ext:junit:1.1.5")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")
     androidTestImplementation("androidx.test:runner:1.5.2")
     androidTestImplementation("androidx.test:rules:1.5.0")
-
-    // Compose UI测试
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
-
-    // Hilt测试（如使用Hilt）
-    // androidTestImplementation("com.google.dagger:hilt-android-testing:2.50")
-    // kaptAndroidTest("com.google.dagger:hilt-compiler:2.50")
 }
 
-// JaCoCo覆盖率配置
 jacoco {
     toolVersion = "0.8.11"
 }

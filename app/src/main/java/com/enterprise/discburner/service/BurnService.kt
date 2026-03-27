@@ -21,13 +21,11 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.enterprise.discburner.R
 import com.enterprise.discburner.data.AuditEvent
-import com.enterprise.discburner.data.AuditLogger
+import com.enterprise.discburner.data.EnhancedAuditLogger
 import com.enterprise.discburner.data.BurnResult
 import com.enterprise.discburner.filesystem.Iso9660Generator
 import com.enterprise.discburner.usb.BurnStage
 import com.enterprise.discburner.usb.DiscAnalysisResult
-import com.enterprise.discburner.usb.MultiSessionDiscBurner
-import com.enterprise.discburner.usb.UsbBurnerManager
 import com.enterprise.discburner.usb.WriteMode
 import com.enterprise.discburner.usb.WriteOptions
 import kotlinx.coroutines.CoroutineScope
@@ -71,11 +69,13 @@ sealed class ServiceState {
 }
 
 /**
- * 刻录服务
+ * 刻录服务 V2
  * 支持：
  * 1. 直接刻录ISO文件
  * 2. 将任意文件打包成ISO后刻录
  * 3. 多会话（补刻）支持
+ * 4. 刻录队列管理
+ * 5. 增强审计日志
  */
 class BurnService : Service() {
 
@@ -87,8 +87,9 @@ class BurnService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     private lateinit var usbManager: UsbBurnerManager
-    private lateinit var auditLogger: AuditLogger
+    private lateinit var auditLogger: EnhancedAuditLogger
     private lateinit var isoGenerator: Iso9660Generator
+    private var burnQueueManager: BurnQueueManager? = null
 
     private var currentBurner: MultiSessionDiscBurner? = null
     private var burnJob: Job? = null
@@ -119,8 +120,9 @@ class BurnService : Service() {
         Log.i(TAG, "服务创建")
 
         usbManager = UsbBurnerManager(this)
-        auditLogger = AuditLogger(this)
+        auditLogger = EnhancedAuditLogger(this)
         isoGenerator = Iso9660Generator()
+        burnQueueManager = BurnQueueManager(this, auditLogger)
 
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, createIdleNotification())
@@ -133,6 +135,11 @@ class BurnService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         return START_NOT_STICKY
     }
+
+    /**
+     * 获取队列管理器
+     */
+    fun getQueueManager(): BurnQueueManager? = burnQueueManager
 
     /**
      * 分析光盘状态
@@ -186,7 +193,17 @@ class BurnService : Service() {
     }
 
     /**
-     * 开始刻录任务
+     * 添加任务到队列（新版本）
+     */
+    fun enqueueTask(task: BurnTask, options: WriteOptions, priority: BurnPriority = BurnPriority.NORMAL): String {
+        val queueManager = burnQueueManager ?: run {
+            throw IllegalStateException("队列管理器未初始化")
+        }
+        return queueManager.enqueue(task, options, priority)
+    }
+
+    /**
+     * 开始刻录任务（直接执行，绕过队列）
      */
     fun startBurnTask(task: BurnTask) {
         when (task) {
@@ -281,8 +298,8 @@ class BurnService : Service() {
 
                 handleBurnResult(burnResult)
 
-                // 3. 清理临时ISO文件（可选，保留用于调试）
-                // isoFile.delete()
+                // 3. 清理临时ISO文件
+                isoFile.delete()
 
             }.onFailure { error ->
                 _serviceState.value = ServiceState.Error("ISO生成失败: ${error.message}")
@@ -327,6 +344,16 @@ class BurnService : Service() {
     }
 
     /**
+     * 获取审计日志Flow
+     */
+    fun getAuditLogsFlow() = auditLogger.getAllLogsFlow()
+
+    /**
+     * 获取刻录会话Flow
+     */
+    fun getBurnSessionsFlow() = auditLogger.getAllSessionsFlow()
+
+    /**
      * 获取USB管理器
      */
     fun getUsbManager(): UsbBurnerManager = usbManager
@@ -335,6 +362,11 @@ class BurnService : Service() {
      * 获取当前刻录器
      */
     fun getBurner(): MultiSessionDiscBurner? = currentBurner
+
+    /**
+     * 获取审计日志器
+     */
+    fun getAuditLogger(): EnhancedAuditLogger = auditLogger
 
     override fun onDestroy() {
         super.onDestroy()
