@@ -5,9 +5,12 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.ServiceConnection
 import android.hardware.usb.UsbDevice
+import android.net.Uri
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
@@ -17,11 +20,16 @@ import android.os.VibratorManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.enterprise.discburner.R
+import com.enterprise.discburner.data.AuditEvent
 import com.enterprise.discburner.data.AuditLogger
 import com.enterprise.discburner.data.BurnResult
+import com.enterprise.discburner.filesystem.Iso9660Generator
 import com.enterprise.discburner.usb.BurnStage
-import com.enterprise.discburner.usb.DaoDiscBurner
+import com.enterprise.discburner.usb.DiscAnalysisResult
+import com.enterprise.discburner.usb.MultiSessionDiscBurner
 import com.enterprise.discburner.usb.UsbBurnerManager
+import com.enterprise.discburner.usb.WriteMode
+import com.enterprise.discburner.usb.WriteOptions
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -34,8 +42,40 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
+ * 刻录任务类型
+ */
+sealed class BurnTask {
+    data class BurnIso(
+        val isoFile: File,
+        val options: WriteOptions
+    ) : BurnTask()
+
+    data class BurnFiles(
+        val sourceFiles: List<File>,
+        val volumeLabel: String,
+        val options: WriteOptions
+    ) : BurnTask()
+}
+
+/**
+ * 服务状态
+ */
+sealed class ServiceState {
+    object Idle : ServiceState()
+    object AnalyzingDisc : ServiceState()
+    data class AnalysisComplete(val result: DiscAnalysisResult) : ServiceState()
+    object GeneratingIso : ServiceState()
+    object Burning : ServiceState()
+    data class Completed(val result: BurnResult.Success) : ServiceState()
+    data class Error(val message: String) : ServiceState()
+}
+
+/**
  * 刻录服务
- * 以前台服务形式运行，确保刻录过程不被系统杀死
+ * 支持：
+ * 1. 直接刻录ISO文件
+ * 2. 将任意文件打包成ISO后刻录
+ * 3. 多会话（补刻）支持
  */
 class BurnService : Service() {
 
@@ -48,9 +88,11 @@ class BurnService : Service() {
 
     private lateinit var usbManager: UsbBurnerManager
     private lateinit var auditLogger: AuditLogger
+    private lateinit var isoGenerator: Iso9660Generator
 
-    private var currentBurner: DaoDiscBurner? = null
+    private var currentBurner: MultiSessionDiscBurner? = null
     private var burnJob: Job? = null
+    private var isoGenerationJob: Job? = null
 
     // 服务状态
     private val _serviceState = MutableStateFlow<ServiceState>(ServiceState.Idle)
@@ -60,9 +102,13 @@ class BurnService : Service() {
     private val _burnProgress = MutableStateFlow(0f)
     val burnProgress: StateFlow<Float> = _burnProgress
 
-    // 当前刻录信息
-    private val _currentBurnInfo = MutableStateFlow<BurnInfo?>(null)
-    val currentBurnInfo: StateFlow<BurnInfo?> = _currentBurnInfo
+    // ISO生成进度
+    private val _isoProgress = MutableStateFlow(0f)
+    val isoProgress: StateFlow<Float> = _isoProgress
+
+    // 当前任务信息
+    private val _currentTaskInfo = MutableStateFlow<TaskInfo?>(null)
+    val currentTaskInfo: StateFlow<TaskInfo?> = _currentTaskInfo
 
     inner class LocalBinder : Binder() {
         fun getService(): BurnService = this@BurnService
@@ -74,6 +120,7 @@ class BurnService : Service() {
 
         usbManager = UsbBurnerManager(this)
         auditLogger = AuditLogger(this)
+        isoGenerator = Iso9660Generator()
 
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, createIdleNotification())
@@ -88,6 +135,35 @@ class BurnService : Service() {
     }
 
     /**
+     * 分析光盘状态
+     */
+    fun analyzeDisc() {
+        val burner = currentBurner ?: run {
+            _serviceState.value = ServiceState.Error("刻录机未连接")
+            return
+        }
+
+        serviceScope.launch {
+            _serviceState.value = ServiceState.AnalyzingDisc
+            updateNotification("分析光盘", "正在读取光盘信息...", false)
+
+            val result = burner.analyzeDisc()
+
+            result.onSuccess { analysis ->
+                _serviceState.value = ServiceState.AnalysisComplete(analysis)
+                updateNotification(
+                    "分析完成",
+                    "发现 ${analysis.sessions.size} 个会话，${analysis.tracks.size} 个轨道",
+                    false
+                )
+            }.onFailure { error ->
+                _serviceState.value = ServiceState.Error("分析失败: ${error.message}")
+                updateNotification("分析失败", error.message ?: "未知错误", true)
+            }
+        }
+    }
+
+    /**
      * 准备刻录（连接设备）
      */
     fun prepareBurn(device: UsbDevice): Boolean {
@@ -98,7 +174,7 @@ class BurnService : Service() {
 
         val connection = usbManager.connectDevice(device) ?: return false
 
-        currentBurner = DaoDiscBurner(
+        currentBurner = MultiSessionDiscBurner(
             connection.first,
             connection.second,
             connection.third,
@@ -110,10 +186,24 @@ class BurnService : Service() {
     }
 
     /**
-     * 开始刻录
+     * 开始刻录任务
      */
-    fun startBurning(isoFile: File) {
-        if (currentBurner == null) {
+    fun startBurnTask(task: BurnTask) {
+        when (task) {
+            is BurnTask.BurnIso -> {
+                startBurningIso(task.isoFile, task.options)
+            }
+            is BurnTask.BurnFiles -> {
+                startBurningFiles(task.sourceFiles, task.volumeLabel, task.options)
+            }
+        }
+    }
+
+    /**
+     * 直接刻录ISO文件
+     */
+    private fun startBurningIso(isoFile: File, options: WriteOptions) {
+        val burner = currentBurner ?: run {
             updateNotification("错误", "刻录机未连接", true)
             return
         }
@@ -121,48 +211,112 @@ class BurnService : Service() {
         burnJob?.cancel()
         burnJob = serviceScope.launch {
             _serviceState.value = ServiceState.Burning
-            _currentBurnInfo.value = BurnInfo(
+            _currentTaskInfo.value = TaskInfo(
+                type = "ISO刻录",
                 fileName = isoFile.name,
                 fileSize = isoFile.length(),
                 startTime = System.currentTimeMillis()
             )
 
-            val result = currentBurner!!.burnIsoDao(isoFile) { stage, progress ->
+            val result = burner.burnIso(isoFile, options) { stage, progress ->
                 _burnProgress.value = progress
                 updateNotificationForStage(stage, progress)
             }
 
-            when (result) {
-                is BurnResult.Success -> {
-                    _serviceState.value = ServiceState.Completed(result)
-                    updateNotification(
-                        "刻录完成",
-                        "${isoFile.name} 已成功刻录并校验",
-                        false
-                    )
-                    playCompletionSound()
+            handleBurnResult(result)
+        }
+    }
+
+    /**
+     * 刻录任意文件（先生成ISO）
+     */
+    private fun startBurningFiles(
+        sourceFiles: List<File>,
+        volumeLabel: String,
+        options: WriteOptions
+    ) {
+        val burner = currentBurner ?: run {
+            updateNotification("错误", "刻录机未连接", true)
+            return
+        }
+
+        burnJob?.cancel()
+        burnJob = serviceScope.launch {
+            _serviceState.value = ServiceState.GeneratingIso
+            _currentTaskInfo.value = TaskInfo(
+                type = "文件刻录",
+                fileName = "$volumeLabel.iso",
+                fileSize = sourceFiles.sumOf { it.length() },
+                startTime = System.currentTimeMillis()
+            )
+
+            // 1. 生成ISO文件
+            val cacheDir = File(cacheDir, "iso_cache")
+            cacheDir.mkdirs()
+            val isoFile = File(cacheDir, "${volumeLabel}_${System.currentTimeMillis()}.iso")
+
+            val isoResult = withContext(Dispatchers.IO) {
+                isoGenerator.generateIso(
+                    sourceFiles = sourceFiles,
+                    outputFile = isoFile,
+                    volumeLabel = volumeLabel,
+                    callback = { progress, stage ->
+                        _isoProgress.value = progress
+                        updateNotification("生成ISO", stage, false)
+                    }
+                )
+            }
+
+            isoResult.onSuccess { isoSize ->
+                // 2. 刻录生成的ISO
+                _serviceState.value = ServiceState.Burning
+                _currentTaskInfo.value = _currentTaskInfo.value?.copy(
+                    fileSize = isoSize
+                )
+
+                val burnResult = burner.burnIso(isoFile, options) { stage, progress ->
+                    _burnProgress.value = progress
+                    updateNotificationForStage(stage, progress)
                 }
-                is BurnResult.Failure -> {
-                    _serviceState.value = ServiceState.Error(result.message)
-                    updateNotification(
-                        "刻录失败",
-                        result.message,
-                        true
-                    )
-                }
+
+                handleBurnResult(burnResult)
+
+                // 3. 清理临时ISO文件（可选，保留用于调试）
+                // isoFile.delete()
+
+            }.onFailure { error ->
+                _serviceState.value = ServiceState.Error("ISO生成失败: ${error.message}")
+                updateNotification("错误", "ISO生成失败: ${error.message}", true)
+            }
+        }
+    }
+
+    private fun handleBurnResult(result: BurnResult) {
+        when (result) {
+            is BurnResult.Success -> {
+                _serviceState.value = ServiceState.Completed(result)
+                updateNotification("刻录完成", "校验通过，数据完整性确认", false)
+                playCompletionSound()
+            }
+            is BurnResult.Failure -> {
+                _serviceState.value = ServiceState.Error(result.message)
+                updateNotification("刻录失败", result.message, true)
             }
         }
     }
 
     /**
-     * 取消刻录
+     * 取消任务
      */
-    fun cancelBurn() {
+    fun cancelTask() {
         burnJob?.cancel()
+        isoGenerationJob?.cancel()
         burnJob = null
+        isoGenerationJob = null
         _serviceState.value = ServiceState.Idle
         _burnProgress.value = 0f
-        updateNotification("已取消", "刻录任务已取消", false)
+        _isoProgress.value = 0f
+        updateNotification("已取消", "任务已取消", false)
     }
 
     /**
@@ -177,10 +331,16 @@ class BurnService : Service() {
      */
     fun getUsbManager(): UsbBurnerManager = usbManager
 
+    /**
+     * 获取当前刻录器
+     */
+    fun getBurner(): MultiSessionDiscBurner? = currentBurner
+
     override fun onDestroy() {
         super.onDestroy()
         serviceScope.cancel()
         burnJob?.cancel()
+        isoGenerationJob?.cancel()
         currentBurner?.close()
         Log.i(TAG, "服务销毁")
     }
@@ -229,10 +389,11 @@ class BurnService : Service() {
         val (title, indeterminate) = when (stage) {
             BurnStage.DEVICE_PREP -> "准备设备" to true
             BurnStage.DISC_CHECK -> "检查光盘" to true
+            BurnStage.SESSION_ANALYSIS -> "分析现有数据" to true
             BurnStage.LEAD_IN -> "准备写入" to true
             BurnStage.WRITING_DATA -> "正在刻录 ${(progress * 100).toInt()}%" to false
             BurnStage.LEAD_OUT -> "完成写入" to true
-            BurnStage.FINALIZING -> "关闭光盘" to true
+            BurnStage.FINALIZING -> "关闭会话" to true
             BurnStage.VERIFYING -> "校验数据 ${((progress - 0.55f) / 0.45f * 100).toInt()}%" to false
             else -> "处理中" to true
         }
@@ -250,7 +411,6 @@ class BurnService : Service() {
     }
 
     private fun playCompletionSound() {
-        // 震动提示
         val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val vibratorManager = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
             vibratorManager.defaultVibrator
@@ -269,19 +429,10 @@ class BurnService : Service() {
 }
 
 /**
- * 服务状态
+ * 任务信息
  */
-sealed class ServiceState {
-    object Idle : ServiceState()
-    object Burning : ServiceState()
-    data class Completed(val result: BurnResult.Success) : ServiceState()
-    data class Error(val message: String) : ServiceState()
-}
-
-/**
- * 刻录信息
- */
-data class BurnInfo(
+data class TaskInfo(
+    val type: String,
     val fileName: String,
     val fileSize: Long,
     val startTime: Long

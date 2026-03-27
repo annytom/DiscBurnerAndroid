@@ -4,6 +4,9 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.enterprise.discburner.data.BurnResult
+import com.enterprise.discburner.usb.DiscAnalysisResult
+import com.enterprise.discburner.usb.WriteMode
+import com.enterprise.discburner.usb.WriteOptions
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -13,18 +16,40 @@ import java.io.File
  * 刻录界面状态
  */
 data class BurnUiState(
+    // 设备状态
     val isConnected: Boolean = false,
     val deviceName: String? = null,
-    val selectedFile: File? = null,
+
+    // 光盘分析
+    val discAnalysis: DiscAnalysisResult? = null,
+    val isAnalyzing: Boolean = false,
+
+    // 文件选择
+    val selectedFiles: List<File> = emptyList(),
+    val selectedIsoFile: File? = null,
+    val volumeLabel: String = "BACKUP",
+
+    // 刻录选项
+    val writeMode: WriteMode = WriteMode.TAO,
+    val closeSession: Boolean = false,
+    val closeDisc: Boolean = false,
+    val verifyAfterBurn: Boolean = true,
+
+    // 任务状态
+    val isGeneratingIso: Boolean = false,
+    val isoProgress: Float = 0f,
     val isBurning: Boolean = false,
-    val progress: Float = 0f,
+    val burnProgress: Float = 0f,
     val stage: String = "",
-    val logs: List<String> = emptyList(),
+
+    // 结果和日志
     val lastResult: BurnResult? = null,
+    val logs: List<String> = emptyList(),
+
+    // 操作状态
     val canStartBurn: Boolean = false,
     val showPermissionDialog: Boolean = false,
-    val availableIsos: List<File> = emptyList(),
-    val isLoadingFiles: Boolean = false
+    val currentTab: Int = 0  // 0=文件刻录, 1=ISO刻录
 )
 
 /**
@@ -45,7 +70,7 @@ class BurnViewModel : ViewModel() {
             val timestamp = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
                 .format(java.util.Date())
             val newLog = "[$timestamp] $message"
-            _logs.value = (_logs.value + newLog).takeLast(100) // 保留最近100条
+            _logs.value = (_logs.value + newLog).takeLast(100)
             _uiState.value = _uiState.value.copy(logs = _logs.value)
         }
     }
@@ -56,76 +81,183 @@ class BurnViewModel : ViewModel() {
     fun setDeviceConnected(connected: Boolean, name: String? = null) {
         _uiState.value = _uiState.value.copy(
             isConnected = connected,
-            deviceName = name,
-            canStartBurn = connected && _uiState.value.selectedFile != null && !_uiState.value.isBurning
+            deviceName = name
         )
+        updateCanStartBurn()
+
         if (connected) {
-            addLog("设备已连接: ${name ?: "未知设备"}")
+            addLog("✓ 设备已连接: ${name ?: "未知设备"}")
         } else {
-            addLog("设备已断开")
+            addLog("✗ 设备已断开")
         }
+    }
+
+    /**
+     * 设置光盘分析结果
+     */
+    fun setDiscAnalysis(result: DiscAnalysisResult?) {
+        _uiState.value = _uiState.value.copy(
+            discAnalysis = result,
+            isAnalyzing = false
+        )
+
+        result?.let { analysis ->
+            addLog("光盘分析完成:")
+            addLog("  状态: ${getDiscStatusText(analysis.discInfo.discStatus)}")
+            addLog("  会话数: ${analysis.sessions.size}")
+            addLog("  轨道数: ${analysis.tracks.size}")
+            addLog("  可追加: ${if (analysis.canAppend) "是" else "否"}")
+            addLog("  剩余空间: ${formatSize(analysis.discInfo.remainingSectors * 2048)}")
+
+            // 根据光盘状态推荐写入模式
+            if (analysis.sessions.isNotEmpty() && !analysis.discInfo.isClosed) {
+                // 已有数据但未关闭，推荐TAO模式追加
+                _uiState.value = _uiState.value.copy(
+                    writeMode = WriteMode.TAO,
+                    closeSession = false,
+                    closeDisc = false
+                )
+                addLog("  建议: 使用TAO模式追加刻录")
+            }
+        }
+
+        updateCanStartBurn()
+    }
+
+    /**
+     * 设置分析中状态
+     */
+    fun setAnalyzing(analyzing: Boolean) {
+        _uiState.value = _uiState.value.copy(isAnalyzing = analyzing)
+        if (analyzing) {
+            addLog("正在分析光盘...")
+        }
+    }
+
+    /**
+     * 添加选择的文件
+     */
+    fun addFiles(files: List<File>) {
+        val currentFiles = _uiState.value.selectedFiles.toMutableList()
+        files.forEach { file ->
+            if (currentFiles.none { it.absolutePath == file.absolutePath }) {
+                currentFiles.add(file)
+            }
+        }
+        _uiState.value = _uiState.value.copy(selectedFiles = currentFiles)
+        addLog("添加了 ${files.size} 个文件，共 ${currentFiles.size} 个")
+        updateCanStartBurn()
+    }
+
+    /**
+     * 移除文件
+     */
+    fun removeFile(file: File) {
+        val currentFiles = _uiState.value.selectedFiles.filter { it != file }
+        _uiState.value = _uiState.value.copy(selectedFiles = currentFiles)
+        addLog("移除了: ${file.name}")
+        updateCanStartBurn()
     }
 
     /**
      * 选择ISO文件
      */
-    fun selectFile(file: File) {
+    fun selectIsoFile(file: File) {
         _uiState.value = _uiState.value.copy(
-            selectedFile = file,
-            canStartBurn = _uiState.value.isConnected && !_uiState.value.isBurning
+            selectedIsoFile = file,
+            currentTab = 1
         )
-        addLog("选择文件: ${file.name} (${formatFileSize(file.length())})")
+        addLog("选择ISO: ${file.name} (${formatSize(file.length())})")
+        updateCanStartBurn()
     }
 
     /**
-     * 清除选择
+     * 清除ISO选择
      */
-    fun clearSelection() {
-        _uiState.value = _uiState.value.copy(
-            selectedFile = null,
-            canStartBurn = false
-        )
+    fun clearIsoSelection() {
+        _uiState.value = _uiState.value.copy(selectedIsoFile = null)
+        updateCanStartBurn()
     }
 
     /**
-     * 设置可用ISO文件列表
+     * 设置卷标
      */
-    fun setAvailableIsos(files: List<File>) {
-        _uiState.value = _uiState.value.copy(
-            availableIsos = files,
-            isLoadingFiles = false
-        )
-        addLog("扫描到 ${files.size} 个ISO文件")
+    fun setVolumeLabel(label: String) {
+        _uiState.value = _uiState.value.copy(volumeLabel = label)
     }
 
     /**
-     * 设置加载状态
+     * 设置写入选项
      */
-    fun setLoadingFiles(loading: Boolean) {
-        _uiState.value = _uiState.value.copy(isLoadingFiles = loading)
+    fun setWriteOptions(
+        mode: WriteMode? = null,
+        closeSession: Boolean? = null,
+        closeDisc: Boolean? = null,
+        verify: Boolean? = null
+    ) {
+        _uiState.value = _uiState.value.copy(
+            writeMode = mode ?: _uiState.value.writeMode,
+            closeSession = closeSession ?: _uiState.value.closeSession,
+            closeDisc = closeDisc ?: _uiState.value.closeDisc,
+            verifyAfterBurn = verify ?: _uiState.value.verifyAfterBurn
+        )
+
+        mode?.let { addLog("写入模式: ${it.description}") }
+        closeSession?.let { addLog("关闭会话: ${if (it) "是" else "否"}") }
+        closeDisc?.let { addLog("关闭光盘: ${if (it) "是" else "否"}") }
+    }
+
+    /**
+     * 切换标签页
+     */
+    fun setCurrentTab(tab: Int) {
+        _uiState.value = _uiState.value.copy(currentTab = tab)
+        updateCanStartBurn()
+    }
+
+    /**
+     * 开始ISO生成
+     */
+    fun startIsoGeneration() {
+        _uiState.value = _uiState.value.copy(
+            isGeneratingIso = true,
+            isoProgress = 0f
+        )
+        addLog("开始生成ISO...")
+    }
+
+    /**
+     * 更新ISO生成进度
+     */
+    fun updateIsoProgress(progress: Float, stage: String) {
+        _uiState.value = _uiState.value.copy(
+            isoProgress = progress
+        )
+        if (stage.isNotEmpty()) {
+            addLog("ISO生成: $stage")
+        }
     }
 
     /**
      * 开始刻录
      */
-    fun startBurn() {
+    fun startBurning() {
         _uiState.value = _uiState.value.copy(
             isBurning = true,
-            progress: 0f,
-            stage: "准备中...",
-            canStartBurn = false,
+            burnProgress = 0f,
+            stage = "准备中...",
             lastResult = null
         )
-        addLog("开始刻录任务")
+        addLog("========== 开始刻录 ==========")
     }
 
     /**
-     * 更新进度
+     * 更新刻录进度
      */
-    fun updateProgress(stage: String, progress: Float) {
+    fun updateBurnProgress(stage: String, progress: Float) {
         _uiState.value = _uiState.value.copy(
             stage = stage,
-            progress = progress
+            burnProgress = progress
         )
     }
 
@@ -134,25 +266,35 @@ class BurnViewModel : ViewModel() {
      */
     fun completeBurn(result: BurnResult) {
         _uiState.value = _uiState.value.copy(
+            isGeneratingIso = false,
             isBurning = false,
-            lastResult = result,
-            canStartBurn = _uiState.value.isConnected && _uiState.value.selectedFile != null
+            lastResult = result
         )
 
         when (result) {
             is BurnResult.Success -> {
-                addLog("✓ 刻录完成: ${result.fileName}")
-                addLog("  用时: ${formatDuration(result.duration)}")
-                addLog("  扇区数: ${result.sectorsWritten}")
-                addLog("  源文件SHA256: ${result.sourceHash.take(16)}...")
-                addLog("  光盘校验SHA256: ${result.verifiedHash.take(16)}...")
-                addLog("  校验结果: ✓ 通过")
+                addLog("========== 刻录成功 ==========")
+                addLog("会话ID: ${result.sessionId}")
+                addLog("用时: ${formatDuration(result.duration)}")
+                addLog("扇区数: ${result.sectorsWritten}")
+                addLog("源文件SHA256: ${result.sourceHash.take(16)}...")
+                addLog("光盘校验SHA256: ${result.verifiedHash.take(16)}...")
+                addLog("校验结果: ✓ 通过")
+
+                // 成功后清除选择，但保留追加选项
+                _uiState.value = _uiState.value.copy(
+                    selectedFiles = emptyList(),
+                    selectedIsoFile = null
+                )
             }
             is BurnResult.Failure -> {
-                addLog("✗ 刻录失败: ${result.message}")
-                addLog("  错误码: ${result.code.code}")
+                addLog("========== 刻录失败 ==========")
+                addLog("错误: ${result.message}")
+                addLog("错误码: ${result.code.code}")
             }
         }
+
+        updateCanStartBurn()
     }
 
     /**
@@ -170,12 +312,35 @@ class BurnViewModel : ViewModel() {
         _uiState.value = _uiState.value.copy(logs = emptyList())
     }
 
-    private fun formatFileSize(bytes: Long): String {
+    /**
+     * 更新可开始刻录状态
+     */
+    private fun updateCanStartBurn() {
+        val state = _uiState.value
+        val canStart = state.isConnected
+                && state.discAnalysis != null
+                && !state.discAnalysis.discInfo.isClosed
+                && (state.selectedFiles.isNotEmpty() || state.selectedIsoFile != null)
+                && !state.isBurning
+                && !state.isGeneratingIso
+
+        _uiState.value = state.copy(canStartBurn = canStart)
+    }
+
+    private fun getDiscStatusText(status: Int): String {
+        return when (status) {
+            0 -> "空白"
+            1 -> "已使用（可追加）"
+            2 -> "完整（已关闭）"
+            else -> "未知"
+        }
+    }
+
+    private fun formatSize(bytes: Long): String {
         return when {
             bytes >= 1024 * 1024 * 1024 -> "%.2f GB".format(bytes / (1024.0 * 1024.0 * 1024.0))
             bytes >= 1024 * 1024 -> "%.2f MB".format(bytes / (1024.0 * 1024.0))
-            bytes >= 1024 -> "%.2f KB".format(bytes / 1024.0)
-            else -> "$bytes B"
+            else -> "%.2f KB".format(bytes / 1024.0)
         }
     }
 

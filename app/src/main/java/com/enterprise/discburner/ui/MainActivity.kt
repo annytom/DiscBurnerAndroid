@@ -13,11 +13,15 @@ import android.os.Environment
 import android.os.IBinder
 import android.provider.Settings
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -31,9 +35,10 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.enterprise.discburner.data.BurnResult
 import com.enterprise.discburner.service.BurnService
+import com.enterprise.discburner.service.BurnTask
 import com.enterprise.discburner.service.ServiceState
 import com.enterprise.discburner.ui.theme.DiscBurnerTheme
-import com.enterprise.discburner.usb.UsbDeviceState
+import com.enterprise.discburner.usb.*
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -41,7 +46,6 @@ class MainActivity : ComponentActivity() {
 
     private var burnService: BurnService? = null
     private var serviceBound = false
-
     private val viewModel = BurnViewModel()
 
     private val serviceConnection = object : ServiceConnection {
@@ -58,26 +62,49 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // 存储权限请求
     private val storagePermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
-        val allGranted = permissions.entries.all { it.value }
-        if (allGranted) {
-            viewModel.addLog("存储权限已授予")
-            scanIsoFiles()
+        if (permissions.entries.all { it.value }) {
+            viewModel.addLog("✓ 存储权限已授予")
         } else {
-            viewModel.addLog("存储权限被拒绝，无法读取ISO文件")
+            viewModel.addLog("✗ 存储权限被拒绝")
         }
     }
 
-    // USB权限广播
+    private val filePickerLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        uri?.let { handleFileSelection(it) }
+    }
+
+    private val multiFilePickerLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris: List<Uri>? ->
+        uris?.let { handleMultipleFileSelection(it) }
+    }
+
+    private fun handleFileSelection(uri: Uri) {
+        val file = File(uri.path ?: return)
+        if (file.extension.lowercase() == "iso") {
+            viewModel.selectIsoFile(file)
+        } else {
+            viewModel.addFiles(listOf(file))
+        }
+    }
+
+    private fun handleMultipleFileSelection(uris: List<Uri>) {
+        val files = uris.mapNotNull { uri ->
+            uri.path?.let { File(it) }
+        }
+        viewModel.addFiles(files)
+    }
+
     private val usbReceiver = UsbBurnerManager(this).usbReceiver
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // 启动并绑定服务
         Intent(this, BurnService::class.java).also { intent ->
             startService(intent)
             bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
@@ -88,54 +115,30 @@ class MainActivity : ComponentActivity() {
                 BurnScreen(
                     viewModel = viewModel,
                     onScanDevice = { scanForDevice() },
+                    onAnalyzeDisc = { analyzeDisc() },
                     onStartBurn = { startBurn() },
                     onCancelBurn = { cancelBurn() },
                     onExportLogs = { exportLogs() },
                     onClearLogs = { viewModel.clearLogs() },
-                    onFileSelected = { file -> viewModel.selectFile(file) },
+                    onAddFiles = { multiFilePickerLauncher.launch(arrayOf("*/*")) },
+                    onAddIso = { filePickerLauncher.launch(arrayOf("application/x-iso9660-image")) },
                     onRequestStoragePermission = { requestStoragePermission() }
                 )
             }
         }
 
-        // 请求存储权限
         requestStoragePermission()
-    }
-
-    override fun onResume() {
-        super.onResume()
-        // 注册USB广播
-        val filter = android.content.IntentFilter().apply {
-            addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
-            addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
-            addAction("com.enterprise.discburner.USB_PERMISSION")
-        }
-        registerReceiver(usbReceiver, filter)
-    }
-
-    override fun onPause() {
-        super.onPause()
-        unregisterReceiver(usbReceiver)
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        if (serviceBound) {
-            unbindService(serviceConnection)
-        }
     }
 
     private fun observeServiceState() {
         val service = burnService ?: return
         val usbManager = service.getUsbManager()
 
-        // 观察USB设备状态
         lifecycleScope.launchWhenStarted {
             usbManager.deviceState.collect { state ->
                 when (state) {
                     is UsbDeviceState.Connected -> {
                         viewModel.setDeviceConnected(true, state.deviceName)
-                        // 自动准备刻录
                         usbManager.getCurrentDevice()?.let { device ->
                             service.prepareBurn(device)
                         }
@@ -151,12 +154,20 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // 观察服务状态
         lifecycleScope.launchWhenStarted {
             service.serviceState.collect { state ->
                 when (state) {
+                    is ServiceState.AnalyzingDisc -> {
+                        viewModel.setAnalyzing(true)
+                    }
+                    is ServiceState.AnalysisComplete -> {
+                        viewModel.setDiscAnalysis(state.result)
+                    }
+                    is ServiceState.GeneratingIso -> {
+                        viewModel.startIsoGeneration()
+                    }
                     is ServiceState.Burning -> {
-                        viewModel.startBurn()
+                        viewModel.startBurning()
                     }
                     is ServiceState.Completed -> {
                         viewModel.completeBurn(state.result)
@@ -171,17 +182,15 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // 观察进度
         lifecycleScope.launchWhenStarted {
             service.burnProgress.collect { progress ->
-                val stage = when {
-                    progress < 0.10f -> "准备中"
-                    progress < 0.50f -> "刻录中"
-                    progress < 0.55f -> "完成写入"
-                    progress < 1.0f -> "校验中"
-                    else -> "完成"
-                }
-                viewModel.updateProgress(stage, progress)
+                viewModel.updateBurnProgress("刻录中", progress)
+            }
+        }
+
+        lifecycleScope.launchWhenStarted {
+            service.isoProgress.collect { progress ->
+                viewModel.updateIsoProgress(progress, "")
             }
         }
     }
@@ -201,59 +210,55 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun scanIsoFiles() {
-        viewModel.setLoadingFiles(true)
-        viewModel.addLog("扫描ISO文件...")
-
-        // 扫描指定目录
-        val directories = listOf(
-            File(Environment.getExternalStorageDirectory(), "Backups"),
-            File(Environment.getExternalStorageDirectory(), "ISOs"),
-            File(Environment.getExternalStorageDirectory(), "Downloads"),
-            getExternalFilesDir(null)
-        )
-
-        val isoFiles = mutableListOf<File>()
-        directories.forEach { dir ->
-            dir?.listFiles { file ->
-                file.isFile && file.extension.equals("iso", ignoreCase = true)
-            }?.let { isoFiles.addAll(it) }
-        }
-
-        viewModel.setAvailableIsos(isoFiles)
+    private fun analyzeDisc() {
+        burnService?.analyzeDisc()
     }
 
     private fun startBurn() {
-        val file = viewModel.uiState.value.selectedFile ?: return
-        burnService?.startBurning(file)
+        val state = viewModel.uiState.value
+
+        val options = WriteOptions(
+            writeMode = state.writeMode,
+            closeSession = state.closeSession,
+            closeDisc = state.closeDisc,
+            verifyAfterBurn = state.verifyAfterBurn,
+            sessionName = state.volumeLabel
+        )
+
+        val task = when {
+            state.selectedIsoFile != null -> {
+                BurnTask.BurnIso(state.selectedIsoFile, options)
+            }
+            state.selectedFiles.isNotEmpty() -> {
+                BurnTask.BurnFiles(state.selectedFiles, state.volumeLabel, options)
+            }
+            else -> return
+        }
+
+        burnService?.startBurnTask(task)
     }
 
     private fun cancelBurn() {
-        burnService?.cancelBurn()
-        viewModel.addLog("刻录已取消")
+        burnService?.cancelTask()
+        viewModel.addLog("任务已取消")
     }
 
     private fun exportLogs() {
         val file = burnService?.exportAuditLogs()
         if (file != null) {
             viewModel.addLog("审计日志已导出: ${file.absolutePath}")
-            // 可以添加分享功能
         }
     }
 
     private fun requestStoragePermission() {
         when {
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.R -> {
-                // Android 11+: 请求所有文件访问权限
                 if (!Environment.isExternalStorageManager()) {
                     val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
                     startActivity(intent)
-                } else {
-                    scanIsoFiles()
                 }
             }
             else -> {
-                // Android 10及以下: 请求传统存储权限
                 storagePermissionLauncher.launch(
                     arrayOf(
                         android.Manifest.permission.READ_EXTERNAL_STORAGE,
@@ -263,6 +268,28 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun onResume() {
+        super.onResume()
+        val filter = android.content.IntentFilter().apply {
+            addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
+            addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
+            addAction("com.enterprise.discburner.USB_PERMISSION")
+        }
+        registerReceiver(usbReceiver, filter)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        unregisterReceiver(usbReceiver)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        if (serviceBound) {
+            unbindService(serviceConnection)
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -270,11 +297,13 @@ class MainActivity : ComponentActivity() {
 fun BurnScreen(
     viewModel: BurnViewModel,
     onScanDevice: () -> Unit,
+    onAnalyzeDisc: () -> Unit,
     onStartBurn: () -> Unit,
     onCancelBurn: () -> Unit,
     onExportLogs: () -> Unit,
     onClearLogs: () -> Unit,
-    onFileSelected: (File) -> Unit,
+    onAddFiles: () -> Unit,
+    onAddIso: () -> Unit,
     onRequestStoragePermission: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -296,9 +325,12 @@ fun BurnScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+                .padding(horizontal = 16.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            Spacer(modifier = Modifier.height(4.dp))
+
             // 设备状态卡片
             DeviceStatusCard(
                 isConnected = uiState.isConnected,
@@ -306,20 +338,64 @@ fun BurnScreen(
                 onScanClick = onScanDevice
             )
 
-            // ISO文件选择
-            IsoFileSelector(
-                selectedFile = uiState.selectedFile,
-                availableFiles = uiState.availableIsos,
-                isLoading = uiState.isLoadingFiles,
-                onFileSelected = onFileSelected,
-                onRefresh = { onRequestStoragePermission() }
-            )
+            // 光盘分析卡片（仅在连接后显示）
+            if (uiState.isConnected) {
+                DiscAnalysisCard(
+                    isAnalyzing = uiState.isAnalyzing,
+                    analysis = uiState.discAnalysis,
+                    onAnalyzeClick = onAnalyzeDisc
+                )
+            }
+
+            // 刻录选项（仅在分析后显示）
+            if (uiState.discAnalysis != null) {
+                WriteOptionsCard(
+                    writeMode = uiState.writeMode,
+                    closeSession = uiState.closeSession,
+                    closeDisc = uiState.closeDisc,
+                    verifyAfterBurn = uiState.verifyAfterBurn,
+                    canAppend = uiState.discAnalysis.canAppend,
+                    hasExistingSessions = uiState.discAnalysis.sessions.isNotEmpty(),
+                    onWriteModeChange = { viewModel.setWriteOptions(mode = it) },
+                    onCloseSessionChange = { viewModel.setWriteOptions(closeSession = it) },
+                    onCloseDiscChange = { viewModel.setWriteOptions(closeDisc = it) },
+                    onVerifyChange = { viewModel.setWriteOptions(verify = it) }
+                )
+            }
+
+            // 文件选择区域（标签页）
+            if (uiState.discAnalysis != null && !uiState.discAnalysis.discInfo.isClosed) {
+                FileSelectionTabs(
+                    currentTab = uiState.currentTab,
+                    onTabChange = { viewModel.setCurrentTab(it) },
+                    fileTab = {
+                        FileSelectionPanel(
+                            selectedFiles = uiState.selectedFiles,
+                            volumeLabel = uiState.volumeLabel,
+                            onVolumeLabelChange = { viewModel.setVolumeLabel(it) },
+                            onAddFiles = onAddFiles,
+                            onRemoveFile = { viewModel.removeFile(it) }
+                        )
+                    },
+                    isoTab = {
+                        IsoSelectionPanel(
+                            selectedIso = uiState.selectedIsoFile,
+                            onSelectIso = onAddIso,
+                            onClearIso = { viewModel.clearIsoSelection() }
+                        )
+                    }
+                )
+            }
 
             // 进度显示
+            if (uiState.isGeneratingIso) {
+                IsoProgressCard(progress = uiState.isoProgress)
+            }
+
             if (uiState.isBurning) {
                 BurnProgressCard(
                     stage = uiState.stage,
-                    progress = uiState.progress
+                    progress = uiState.burnProgress
                 )
             }
 
@@ -332,16 +408,18 @@ fun BurnScreen(
             LogOutput(
                 logs = uiState.logs,
                 onClear = onClearLogs,
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.height(200.dp)
             )
 
             // 操作按钮
             ActionButtons(
-                isBurning = uiState.isBurning,
+                isBurning = uiState.isBurning || uiState.isGeneratingIso,
                 canStart = uiState.canStartBurn,
                 onStartBurn = onStartBurn,
                 onCancelBurn = onCancelBurn
             )
+
+            Spacer(modifier = Modifier.height(16.dp))
         }
     }
 }
@@ -370,22 +448,171 @@ fun DeviceStatusCard(
                     null,
                     tint = if (isConnected) Color(0xFF4CAF50) else Color(0xFFFF9800)
                 )
-                Spacer(modifier = Modifier.width(8.dp))
+                Spacer(modifier = Modifier.width(12.dp))
                 Column {
                     Text(
                         if (isConnected) "设备已连接" else "未连接刻录机",
                         style = MaterialTheme.typography.titleMedium
                     )
                     if (isConnected && deviceName != null) {
-                        Text(deviceName, style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            deviceName,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
             }
 
             if (!isConnected) {
                 Button(onClick = onScanClick) {
-                    Text("扫描设备")
+                    Icon(Icons.Default.Refresh, null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("扫描")
                 }
+            }
+        }
+    }
+}
+
+@Composable
+fun DiscAnalysisCard(
+    isAnalyzing: Boolean,
+    analysis: DiscAnalysisResult?,
+    onAnalyzeClick: () -> Unit
+) {
+    Card {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("光盘状态", style = MaterialTheme.typography.titleMedium)
+
+                if (analysis == null && !isAnalyzing) {
+                    Button(onClick = onAnalyzeClick) {
+                        Text("分析光盘")
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            when {
+                isAnalyzing -> {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text("正在分析光盘...")
+                    }
+                }
+                analysis != null -> {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        InfoRow("状态", getDiscStatusText(analysis.discInfo.discStatus))
+                        InfoRow("会话数", "${analysis.sessions.size}")
+                        InfoRow("轨道数", "${analysis.tracks.size}")
+                        InfoRow("剩余空间", formatSize(analysis.discInfo.remainingSectors * 2048))
+
+                        if (analysis.canAppend) {
+                            Text(
+                                "✓ 可以追加刻录",
+                                color = Color(0xFF4CAF50),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+
+                        if (analysis.discInfo.isClosed) {
+                            Text(
+                                "✗ 光盘已关闭，无法追加",
+                                color = Color(0xFFF44336),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    }
+                }
+                else -> {
+                    Text(
+                        "请先分析光盘以获取信息",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun WriteOptionsCard(
+    writeMode: WriteMode,
+    closeSession: Boolean,
+    closeDisc: Boolean,
+    verifyAfterBurn: Boolean,
+    canAppend: Boolean,
+    hasExistingSessions: Boolean,
+    onWriteModeChange: (WriteMode) -> Unit,
+    onCloseSessionChange: (Boolean) -> Unit,
+    onCloseDiscChange: (Boolean) -> Unit,
+    onVerifyChange: (Boolean) -> Unit
+) {
+    Card {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("刻录选项", style = MaterialTheme.typography.titleMedium)
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // 写入模式选择
+            Text("写入模式", style = MaterialTheme.typography.bodyMedium)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                WriteMode.values().forEach { mode ->
+                    val enabled = when {
+                        hasExistingSessions && mode == WriteMode.DAO -> false
+                        !canAppend && mode != WriteMode.DAO -> false
+                        else -> true
+                    }
+
+                    FilterChip(
+                        selected = writeMode == mode,
+                        onClick = { if (enabled) onWriteModeChange(mode) },
+                        label = { Text(mode.description) },
+                        enabled = enabled
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // 关闭选项
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(
+                        checked = closeSession,
+                        onCheckedChange = onCloseSessionChange
+                    )
+                    Text("关闭会话")
+                }
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(
+                        checked = closeDisc,
+                        onCheckedChange = onCloseDiscChange
+                    )
+                    Text("关闭光盘（不可再追加）")
+                }
+            }
+
+            // 校验选项
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(
+                    checked = verifyAfterBurn,
+                    onCheckedChange = onVerifyChange
+                )
+                Text("刻录后自动校验数据完整性")
             }
         }
     }
@@ -393,71 +620,209 @@ fun DeviceStatusCard(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun IsoFileSelector(
-    selectedFile: File?,
-    availableFiles: List<File>,
-    isLoading: Boolean,
-    onFileSelected: (File) -> Unit,
-    onRefresh: () -> Unit
+fun FileSelectionTabs(
+    currentTab: Int,
+    onTabChange: (Int) -> Unit,
+    fileTab: @Composable () -> Unit,
+    isoTab: @Composable () -> Unit
 ) {
-    var expanded by remember { mutableStateOf(false) }
-
     Card {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text("选择ISO文件", style = MaterialTheme.typography.titleMedium)
-            Spacer(modifier = Modifier.height(8.dp))
-
-            ExposedDropdownMenuBox(
-                expanded = expanded,
-                onExpandedChange = { expanded = it }
-            ) {
-                OutlinedTextField(
-                    value = selectedFile?.name ?: "请选择文件",
-                    onValueChange = {},
-                    readOnly = true,
-                    trailingIcon = {
-                        if (isLoading) {
-                            CircularProgressIndicator(modifier = Modifier.size(20.dp))
-                        } else {
-                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
-                        }
-                    },
-                    modifier = Modifier.menuAnchor()
+        Column {
+            TabRow(selectedTabIndex = currentTab) {
+                Tab(
+                    selected = currentTab == 0,
+                    onClick = { onTabChange(0) },
+                    text = { Text("刻录文件") },
+                    icon = { Icon(Icons.Default.Folder, null) }
                 )
+                Tab(
+                    selected = currentTab == 1,
+                    onClick = { onTabChange(1) },
+                    text = { Text("刻录ISO") },
+                    icon = { Icon(Icons.Default.DiscFull, null) }
+                )
+            }
 
-                ExposedDropdownMenu(
-                    expanded = expanded,
-                    onDismissRequest = { expanded = false }
+            Box(modifier = Modifier.padding(16.dp)) {
+                if (currentTab == 0) {
+                    fileTab()
+                } else {
+                    isoTab()
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun FileSelectionPanel(
+    selectedFiles: List<File>,
+    volumeLabel: String,
+    onVolumeLabelChange: (String) -> Unit,
+    onAddFiles: () -> Unit,
+    onRemoveFile: (File) -> Unit
+) {
+    Column {
+        OutlinedTextField(
+            value = volumeLabel,
+            onValueChange = onVolumeLabelChange,
+            label = { Text("卷标") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "已选择 ${selectedFiles.size} 个文件",
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Button(onClick = onAddFiles) {
+                Icon(Icons.Default.Add, null)
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("添加文件")
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // 文件列表
+        selectedFiles.forEach { file ->
+            FileListItem(
+                file = file,
+                onRemove = { onRemoveFile(file) }
+            )
+        }
+
+        if (selectedFiles.isEmpty()) {
+            Text(
+                "点击"添加文件"选择要刻录的文件或文件夹",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+fun FileListItem(file: File, onRemove: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(
+            modifier = Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                if (file.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile,
+                null,
+                modifier = Modifier.size(20.dp),
+                tint = MaterialTheme.colorScheme.primary
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    file.name,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Text(
+                    formatSize(file.length()),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        IconButton(onClick = onRemove, modifier = Modifier.size(32.dp)) {
+            Icon(Icons.Default.Close, null, tint = Color(0xFFF44336))
+        }
+    }
+}
+
+@Composable
+fun IsoSelectionPanel(
+    selectedIso: File?,
+    onSelectIso: () -> Unit,
+    onClearIso: () -> Unit
+) {
+    Column {
+        if (selectedIso != null) {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color(0xFFE3F2FD))
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    if (availableFiles.isEmpty()) {
-                        DropdownMenuItem(
-                            text = { Text("未找到ISO文件") },
-                            onClick = {
-                                expanded = false
-                                onRefresh()
-                            }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            selectedIso.name,
+                            style = MaterialTheme.typography.bodyLarge,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
-                    } else {
-                        availableFiles.forEach { file ->
-                            DropdownMenuItem(
-                                text = {
-                                    Column {
-                                        Text(file.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                        Text(
-                                            formatFileSize(file.length()),
-                                            style = MaterialTheme.typography.bodySmall
-                                        )
-                                    }
-                                },
-                                onClick = {
-                                    onFileSelected(file)
-                                    expanded = false
-                                }
-                            )
-                        }
+                        Text(
+                            "${formatSize(selectedIso.length())} · ISO 9660",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    IconButton(onClick = onClearIso) {
+                        Icon(Icons.Default.Close, null, tint = Color(0xFFF44336))
                     }
                 }
             }
+        } else {
+            OutlinedButton(
+                onClick = onSelectIso,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Default.FolderOpen, null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("选择ISO文件")
+            }
+            Text(
+                "支持标准ISO 9660格式的镜像文件",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+fun IsoProgressCard(progress: Float) {
+    Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF8E1))) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Text("正在生成ISO镜像...", style = MaterialTheme.typography.titleSmall)
+            Spacer(modifier = Modifier.height(8.dp))
+            LinearProgressIndicator(
+                progress = { progress },
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                "${(progress * 100).toInt()}%",
+                style = MaterialTheme.typography.bodySmall
+            )
         }
     }
 }
@@ -499,12 +864,8 @@ fun ResultCard(result: BurnResult) {
                         Text("刻录成功", style = MaterialTheme.typography.titleMedium)
                     }
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text("会话ID: ${result.sessionId}")
-                    Text("用时: ${formatDuration(result.duration)}")
-                    Text("扇区数: ${result.sectorsWritten}")
-                    Text("源文件SHA256: ${result.sourceHash.take(16)}...")
-                    Text("校验SHA256: ${result.verifiedHash.take(16)}...")
-                    Text("校验状态: ✓ 通过", color = Color(0xFF4CAF50))
+                    Text("会话ID: ${result.sessionId}", style = MaterialTheme.typography.bodySmall)
+                    Text("SHA256: ${result.sourceHash.take(16)}...", style = MaterialTheme.typography.bodySmall)
                 }
             }
         }
@@ -519,8 +880,7 @@ fun ResultCard(result: BurnResult) {
                         Text("刻录失败", style = MaterialTheme.typography.titleMedium)
                     }
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text(result.message)
-                    Text("错误码: ${result.code.code}", style = MaterialTheme.typography.bodySmall)
+                    Text(result.message, style = MaterialTheme.typography.bodyMedium)
                 }
             }
         }
@@ -550,18 +910,17 @@ fun LogOutput(
 
             Divider()
 
-            LazyColumn(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f)
-                    .padding(16.dp),
-                reverseLayout = true
+                    .padding(16.dp)
+                    .verticalScroll(rememberScrollState())
             ) {
-                items(logs.reversed()) { log ->
+                logs.forEach { log ->
                     Text(
                         log,
                         style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(vertical = 2.dp)
+                        modifier = Modifier.padding(vertical = 1.dp)
                     )
                 }
             }
@@ -588,7 +947,7 @@ fun ActionButtons(
             ) {
                 Icon(Icons.Default.Close, null)
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("取消刻录")
+                Text("取消")
             }
         } else {
             Button(
@@ -604,17 +963,31 @@ fun ActionButtons(
     }
 }
 
-private fun formatFileSize(bytes: Long): String {
-    return when {
-        bytes >= 1024 * 1024 * 1024 -> "%.2f GB".format(bytes / (1024.0 * 1024.0 * 1024.0))
-        bytes >= 1024 * 1024 -> "%.2f MB".format(bytes / (1024.0 * 1024.0))
-        else -> "%.2f KB".format(bytes / 1024.0)
+@Composable
+fun InfoRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(value)
     }
 }
 
-private fun formatDuration(ms: Long): String {
-    val seconds = ms / 1000
-    val minutes = seconds / 60
-    val remainingSeconds = seconds % 60
-    return "${minutes}分${remainingSeconds}秒"
+private fun getDiscStatusText(status: Int): String {
+    return when (status) {
+        0 -> "空白"
+        1 -> "已使用（可追加）"
+        2 -> "完整（已关闭）"
+        else -> "未知"
+    }
+}
+
+private fun formatSize(bytes: Long): String {
+    return when {
+        bytes >= 1024 * 1024 * 1024 -> "%.2f GB".format(bytes / (1024.0 * 1024.0 * 1024.0))
+        bytes >= 1024 * 1024 -> "%.2f MB".format(bytes / (1024.0 * 1024.0))
+        bytes >= 1024 -> "%.2f KB".format(bytes / 1024.0)
+        else -> "$bytes B"
+    }
 }
