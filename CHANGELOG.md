@@ -44,6 +44,21 @@
 - 新增BurnQueueManager
 - 新增ui/screens包（QueueScreen、HistoryScreen）
 
+## [1.3.0] - 2026-03-27
+
+### 新增
+- UI 屏幕组件（HistoryScreen, QueueScreen）
+- 代码审查报告（CODE_REVIEW_REPORT.md）
+- 启动器图标资源
+- EnhancedAuditLogger 单元测试
+- ScsiRetryManager 单元测试
+
+### 改进
+- 更新数据库 DAO 接口
+- 优化多区段刻录器
+- 更新主题样式
+- 完善文档（README, PHASE2_SUMMARY）
+
 ## [1.2.0] - 2026-03-27
 
 ### 新增
